@@ -1,0 +1,287 @@
+package framefold
+
+import (
+	"fmt"
+	"io"
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
+	"text/template"
+	"time"
+
+	"github.com/dsoprea/go-exif/v3"
+)
+
+// FileInfo holds template variables for folder organization
+type FileInfo struct {
+	Year      string
+	Month     string
+	Day       string
+	Hour      string
+	Minute    string
+	MediaType string
+	Extension string
+}
+
+// Processor handles the file organization process
+type Processor struct {
+	config       Config
+	stats        Stats
+	sourceDir    string
+	targetDir    string
+	deleteSource bool
+	processedDirs map[string]bool // Track directories that had files processed
+}
+
+// NewProcessor creates a new file processor
+func NewProcessor(sourceDir, targetDir string, config Config, deleteSource bool) *Processor {
+	return &Processor{
+		config:       config,
+		sourceDir:    sourceDir,
+		targetDir:    targetDir,
+		deleteSource: deleteSource,
+		stats:       Stats{StartTime: time.Now()},
+		processedDirs: make(map[string]bool),
+	}
+}
+
+// Process organizes files from source to target directory
+func (p *Processor) Process() error {
+	// Create target directory if it doesn't exist
+	if err := os.MkdirAll(p.targetDir, 0755); err != nil {
+		return fmt.Errorf("failed to create target directory: %v", err)
+	}
+
+	// Walk through the source directory
+	err := filepath.Walk(p.sourceDir, p.processFile)
+	if err != nil {
+		return fmt.Errorf("error walking through directory: %v", err)
+	}
+
+	// If deleting source files, clean up empty directories
+	if p.deleteSource {
+		if err := p.cleanEmptyDirs(); err != nil {
+			return fmt.Errorf("error cleaning empty directories: %v", err)
+		}
+	}
+
+	return nil
+}
+
+// cleanEmptyDirs removes empty directories in the source tree
+func (p *Processor) cleanEmptyDirs() error {
+	var dirsToCheck []string
+	
+	// Get all directories that had files processed
+	for dir := range p.processedDirs {
+		dirsToCheck = append(dirsToCheck, dir)
+	}
+
+	// Sort directories by depth (deepest first) to ensure proper removal
+	// This ensures we process child directories before their parents
+	for i := 0; i < len(dirsToCheck)-1; i++ {
+		for j := i + 1; j < len(dirsToCheck); j++ {
+			if len(strings.Split(dirsToCheck[i], string(os.PathSeparator))) < len(strings.Split(dirsToCheck[j], string(os.PathSeparator))) {
+				dirsToCheck[i], dirsToCheck[j] = dirsToCheck[j], dirsToCheck[i]
+			}
+		}
+	}
+
+	// Check and remove empty directories
+	for _, dir := range dirsToCheck {
+		// Read directory contents
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue // Directory was already removed
+			}
+			return fmt.Errorf("error reading directory %s: %v", dir, err)
+		}
+
+		// If directory is empty, remove it
+		if len(entries) == 0 {
+			if err := os.Remove(dir); err != nil {
+				return fmt.Errorf("error removing empty directory %s: %v", dir, err)
+			}
+			if p.config.Logging.Enabled {
+				log.Printf("Removed empty directory: %s", dir)
+			}
+		}
+	}
+
+	return nil
+}
+
+// GetStats returns the current processing statistics
+func (p *Processor) GetStats() Stats {
+	return p.stats
+}
+
+func (p *Processor) processFile(path string, info os.FileInfo, err error) error {
+	if err != nil {
+		return err
+	}
+
+	// Skip directories
+	if info.IsDir() {
+		return nil
+	}
+
+	// Check if file is a supported media type
+	ext := strings.ToLower(filepath.Ext(path))
+	mediaType := p.getMediaType(ext)
+	if mediaType == "" {
+		return nil
+	}
+
+	// Track the directory containing this file
+	p.processedDirs[filepath.Dir(path)] = true
+
+	// Update media type counts
+	p.stats.ProcessedFiles++
+	if mediaType == "images" {
+		p.stats.ImageCount++
+	} else if mediaType == "videos" {
+		p.stats.VideoCount++
+	}
+
+	// Update total size
+	p.stats.TotalSize += info.Size()
+
+	// Get file date
+	date, err := p.getFileDate(path)
+	if err != nil {
+		if p.config.Logging.Enabled {
+			log.Printf("Warning: Could not get EXIF data for %s, using file modification time", path)
+		}
+		date = info.ModTime()
+	} else {
+		p.stats.ExifFound++
+	}
+
+	// Create file info for template
+	fileInfo := FileInfo{
+		Year:      date.Format("2006"),
+		Month:     date.Format("01"),
+		Day:       date.Format("02"),
+		Hour:      date.Format("15"),
+		Minute:    date.Format("04"),
+		MediaType: mediaType,
+		Extension: ext[1:], // Remove the dot
+	}
+
+	// Parse and execute the template
+	tmpl, err := template.New("folder").Parse(p.config.FolderTemplate)
+	if err != nil {
+		return fmt.Errorf("failed to parse template: %v", err)
+	}
+
+	var targetPath strings.Builder
+	if err := tmpl.Execute(&targetPath, fileInfo); err != nil {
+		return fmt.Errorf("failed to execute template: %v", err)
+	}
+
+	// Create the target directory
+	newDir := filepath.Join(p.targetDir, targetPath.String())
+	if err := os.MkdirAll(newDir, 0755); err != nil {
+		return fmt.Errorf("failed to create directory %s: %v", newDir, err)
+	}
+
+	// Generate target filename
+	var filename string
+	if p.config.UseOriginalName {
+		filename = filepath.Base(path)
+	} else {
+		filename = fmt.Sprintf("%s-%s-%s%s",
+			date.Format("20060102"),
+			date.Format("150405"),
+			mediaType,
+			ext)
+	}
+
+	// Copy file to new location
+	newPath := filepath.Join(newDir, filename)
+	if err := p.copyFile(path, newPath); err != nil {
+		return fmt.Errorf("failed to copy file %s: %v", path, err)
+	}
+
+	// Delete source file if requested
+	if p.deleteSource {
+		if err := os.Remove(path); err != nil {
+			return fmt.Errorf("failed to delete source file %s: %v", path, err)
+		}
+		if p.config.Logging.Enabled {
+			log.Printf("Moved %s to %s", path, newPath)
+		}
+	} else {
+		if p.config.Logging.Enabled {
+			log.Printf("Copied %s to %s", path, newPath)
+		}
+	}
+
+	return nil
+}
+
+func (p *Processor) getMediaType(ext string) string {
+	for mediaType, extensions := range p.config.MediaTypes {
+		for _, e := range extensions {
+			if e == ext {
+				return mediaType
+			}
+		}
+	}
+	return ""
+}
+
+func (p *Processor) getFileDate(path string) (time.Time, error) {
+	rawExif, err := exif.SearchFileAndExtractExif(path)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	entries, _, err := exif.GetFlatExifDataUniversalSearch(rawExif, nil, true)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	var dateTime string
+	for _, entry := range entries {
+		if entry.TagName == "DateTime" || entry.TagName == "DateTimeOriginal" {
+			dateTime = entry.Formatted
+			break
+		}
+	}
+
+	if dateTime == "" {
+		return time.Time{}, fmt.Errorf("no DateTime found in EXIF")
+	}
+
+	return time.Parse("2006:01:02 15:04:05", dateTime)
+}
+
+func (p *Processor) copyFile(src, dst string) error {
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	dstFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+
+	if _, err := io.Copy(dstFile, srcFile); err != nil {
+		return err
+	}
+
+	// Copy file mode from source
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+
+	return os.Chmod(dst, srcInfo.Mode())
+}
