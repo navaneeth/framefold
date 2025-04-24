@@ -1,0 +1,12 @@
+{
+    "folder_template": "{{.Year}}/{{.Month}}/{{.MediaType}}",
+    "media_types": {
+        "images": [".jpg", ".jpeg", ".png", ".gif", ".heic"],
+        "videos": [".mp4", ".mov", ".avi"]
+    },
+    "use_original_filename": true,
+    "logging": {
+        "enabled": true,
+        "level": "info"
+    }
+}
