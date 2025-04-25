@@ -12,13 +12,38 @@ A minimal photo and video organizer written in Go, perfect for Raspberry Pi.
 - Progress logging
 - Custom file naming options
 - Safe by default: copies files instead of moving them
-- Processing summary with file counts, size, and timing
+- Processing summary with file counts, size, and timing in JSON format
 
 ## Installation
 
+### From Source
+
+1. Clone the repository
 ```bash
-go install
+git clone https://github.com/yourusername/framefold.git
+cd framefold
 ```
+
+2. Build the binary
+```bash
+make local
+```
+
+This will create a `framefold` binary in the current directory with the current git commit hash embedded.
+
+### Cross-compilation
+
+To build for multiple platforms:
+```bash
+make build
+```
+
+This will create binaries for:
+- macOS (Intel and Apple Silicon)
+- Linux (AMD64 and ARM64)
+- Raspberry Pi (ARM)
+
+All binaries will be placed in the `build` directory.
 
 ## Usage
 
@@ -32,21 +57,32 @@ Copy files with custom configuration:
 framefold --source ~/Pictures/Unsorted --target ~/Pictures/Organized --config ~/framefold-config.json
 ```
 
-Move files instead of copying (deletes source files after successful copy):
+Move files instead of copying (deletes source files and empty directories):
 ```bash
 framefold --source ~/Pictures/Unsorted --target ~/Pictures/Organized --delete-source
 ```
 
-Example output:
+Show version information:
+```bash
+framefold --version
 ```
-Processing Summary:
------------------
-Total Files Processed: 150
-Images: 120
-Videos: 30
-Files with EXIF data: 115
-Total Size: 2.5 GB
-Time Taken: 2 minutes 15 seconds
+
+Example version output:
+```
+Framefold version 0.1.0 (a1b2c3d)
+```
+
+Example processing output:
+```json
+{
+  "images": 120,
+  "videos": 30,
+  "files_with_exif": 115,
+  "total_size_bytes": 2684354560,
+  "total_files": 150,
+  "duration": "2 minutes 15 seconds",
+  "total_size": "2.5 GB"
+}
 ```
 
 ## Configuration
@@ -75,7 +111,8 @@ To customize the behavior, create a `config.json` file with your desired setting
 - `--source`: Source directory containing media files (required)
 - `--target`: Target directory for organized files (required)
 - `--config`: Path to configuration file (optional)
-- `--delete-source`: Delete source files after successful copy (optional, default: false)
+- `--delete-source`: Delete source files and empty directories after successful copy (optional, default: false)
+- `--version`: Show version information and git commit hash
 
 ### Template Variables
 
@@ -100,11 +137,11 @@ The program will:
 2. Read EXIF data from media files
 3. Create folders in the target directory based on the template
 4. Copy files to their corresponding folders
-5. Delete source files if --delete-source flag is used
+5. Delete source files and empty directories if --delete-source flag is used
 6. Log the progress of each operation (if logging is enabled)
-7. Display a summary of processed files, including:
+7. Display a summary of processed files in JSON format, including:
    - Total number of files processed
    - Number of images and videos
    - Number of files with EXIF data
-   - Total size of processed files
+   - Total size in bytes and human-readable format
    - Total time taken for processing

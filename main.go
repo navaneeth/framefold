@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 
 	"framefold/pkg/framefold"
 )
@@ -14,6 +15,7 @@ func main() {
 		sourceDir    string
 		targetDir    string
 		deleteSource bool
+		showVersion  bool
 	)
 
 	// Parse command line flags
@@ -21,7 +23,14 @@ func main() {
 	flag.StringVar(&sourceDir, "source", "", "Source directory containing photos")
 	flag.StringVar(&targetDir, "target", "", "Target directory to organize photos")
 	flag.BoolVar(&deleteSource, "delete-source", false, "Delete source files after successful copy (default: false)")
+	flag.BoolVar(&showVersion, "version", false, "Show version information")
 	flag.Parse()
+
+	// Show version if requested
+	if showVersion {
+		fmt.Println(framefold.VersionInfo())
+		os.Exit(0)
+	}
 
 	// Validate required flags
 	if sourceDir == "" || targetDir == "" {

@@ -1,36 +1,41 @@
 package framefold
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 )
 
 // Stats tracks processing statistics
 type Stats struct {
-	ImageCount     int64
-	VideoCount     int64
-	ExifFound      int64
-	TotalSize      int64
-	ProcessedFiles int64
-	StartTime      time.Time
+	ImageCount     int64     `json:"images"`
+	VideoCount     int64     `json:"videos"`
+	ExifFound      int64     `json:"files_with_exif"`
+	TotalSize      int64     `json:"total_size_bytes"`
+	ProcessedFiles int64     `json:"total_files"`
+	StartTime      time.Time `json:"-"` // Don't include in JSON output
+	Duration      string    `json:"duration"`
+	HumanSize     string    `json:"total_size"`
 }
 
-// String formats the stats for display
+// String formats the stats as JSON
 func (s Stats) String() string {
+	// Calculate duration
 	duration := time.Since(s.StartTime)
 	minutes := int(duration.Minutes())
 	seconds := int(duration.Seconds()) % 60
+	s.Duration = fmt.Sprintf("%d minutes %d seconds", minutes, seconds)
+	
+	// Format human-readable size
+	s.HumanSize = formatSize(s.TotalSize)
 
-	return fmt.Sprintf(`
-Processing Summary:
------------------
-Total Files Processed: %d
-Images: %d
-Videos: %d
-Files with EXIF data: %d
-Total Size: %s
-Time Taken: %d minutes %d seconds
-`, s.ProcessedFiles, s.ImageCount, s.VideoCount, s.ExifFound, formatSize(s.TotalSize), minutes, seconds)
+	// Marshal to JSON
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return fmt.Sprintf("error formatting stats: %v", err)
+	}
+
+	return string(data)
 }
 
 // formatSize converts bytes to human-readable format
