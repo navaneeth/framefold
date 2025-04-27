@@ -13,6 +13,9 @@ import (
 	"github.com/dsoprea/go-exif/v3"
 )
 
+// Maximum size to read when looking for EXIF data
+const maxExifSize = 256 * 1024 // 256KB should be enough for EXIF
+
 // FileInfo holds template variables for folder organization
 type FileInfo struct {
 	Year      string
@@ -26,22 +29,22 @@ type FileInfo struct {
 
 // Processor handles the file organization process
 type Processor struct {
-	config       Config
-	stats        Stats
-	sourceDir    string
-	targetDir    string
-	deleteSource bool
+	config        Config
+	stats         Stats
+	sourceDir     string
+	targetDir     string
+	deleteSource  bool
 	processedDirs map[string]bool // Track directories that had files processed
 }
 
 // NewProcessor creates a new file processor
 func NewProcessor(sourceDir, targetDir string, config Config, deleteSource bool) *Processor {
 	return &Processor{
-		config:       config,
-		sourceDir:    sourceDir,
-		targetDir:    targetDir,
-		deleteSource: deleteSource,
-		stats:       Stats{StartTime: time.Now()},
+		config:        config,
+		sourceDir:     sourceDir,
+		targetDir:     targetDir,
+		deleteSource:  deleteSource,
+		stats:         Stats{StartTime: time.Now()},
 		processedDirs: make(map[string]bool),
 	}
 }
@@ -72,7 +75,7 @@ func (p *Processor) Process() error {
 // cleanEmptyDirs removes empty directories in the source tree
 func (p *Processor) cleanEmptyDirs() error {
 	var dirsToCheck []string
-	
+
 	// Get all directories that had files processed
 	for dir := range p.processedDirs {
 		dirsToCheck = append(dirsToCheck, dir)
@@ -235,7 +238,23 @@ func (p *Processor) getMediaType(ext string) string {
 }
 
 func (p *Processor) getFileDate(path string) (time.Time, error) {
-	rawExif, err := exif.SearchFileAndExtractExif(path)
+	file, err := os.Open(path)
+	if err != nil {
+		return time.Time{}, err
+	}
+	defer file.Close()
+
+	// Only read the first maxExifSize bytes
+	limitedReader := io.LimitReader(file, maxExifSize)
+
+	// Read the limited data into memory
+	data, err := io.ReadAll(limitedReader)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	// Try to extract EXIF data from the limited buffer
+	rawExif, err := exif.SearchAndExtractExif(data)
 	if err != nil {
 		return time.Time{}, err
 	}

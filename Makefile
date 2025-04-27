@@ -1,10 +1,10 @@
-.PHONY: build clean test dist install
+.PHONY: build clean test dist install all
 
 # Get the git commit hash (short form)
 GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
 # Get version from version.go
-VERSION := $(shell grep 'Version = ' pkg/framefold/version.go | cut -d'"' -f2)
+VERSION := $(shell awk -F'"' '/Version[[:space:]]*=/{print $$2}' pkg/framefold/version.go)
 
 # Build flags
 LDFLAGS := -ldflags "-X 'framefold/pkg/framefold.CommitHash=$(GIT_COMMIT)'"
@@ -90,3 +90,8 @@ clean:
 # Run tests
 test:
 	go test -v ./...
+
+# Print current version
+version:
+	@echo "Version: $(VERSION)"
+	@echo "Commit:  $(GIT_COMMIT)"

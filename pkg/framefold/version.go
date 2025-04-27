@@ -2,7 +2,7 @@ package framefold
 
 // Version information
 var (
-	Version    = "0.1.0"
+	Version    = "0.1.1"
 	Name       = "Framefold"
 	CommitHash = "unknown" // Will be set during build
 )
