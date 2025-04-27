@@ -1,6 +1,7 @@
 package framefold
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"log"
@@ -13,8 +14,12 @@ import (
 	"github.com/dsoprea/go-exif/v3"
 )
 
-// Maximum size to read when looking for EXIF data
-const maxExifSize = 256 * 1024 // 256KB should be enough for EXIF
+const (
+	// Maximum size to read when looking for EXIF data
+	maxExifSize = 256 * 1024 // 256KB should be enough for EXIF
+	// Buffer size for file operations (1MB)
+	copyBufferSize = 1024 * 1024
+)
 
 // FileInfo holds template variables for folder organization
 type FileInfo struct {
@@ -35,10 +40,16 @@ type Processor struct {
 	targetDir     string
 	deleteSource  bool
 	processedDirs map[string]bool // Track directories that had files processed
+	lock          *processLock
 }
 
 // NewProcessor creates a new file processor
-func NewProcessor(sourceDir, targetDir string, config Config, deleteSource bool) *Processor {
+func NewProcessor(sourceDir, targetDir string, config Config, deleteSource bool) (*Processor, error) {
+	lock, err := newProcessLock()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create process lock: %v", err)
+	}
+
 	return &Processor{
 		config:        config,
 		sourceDir:     sourceDir,
@@ -46,18 +57,29 @@ func NewProcessor(sourceDir, targetDir string, config Config, deleteSource bool)
 		deleteSource:  deleteSource,
 		stats:         Stats{StartTime: time.Now()},
 		processedDirs: make(map[string]bool),
-	}
+		lock:          lock,
+	}, nil
 }
 
 // Process organizes files from source to target directory
 func (p *Processor) Process() error {
+	// Try to acquire lock
+	locked, err := p.lock.acquire()
+	if err != nil {
+		return fmt.Errorf("error acquiring lock: %v", err)
+	}
+	if !locked {
+		return fmt.Errorf("another instance of framefold is already running")
+	}
+	defer p.lock.release()
+
 	// Create target directory if it doesn't exist
 	if err := os.MkdirAll(p.targetDir, 0755); err != nil {
 		return fmt.Errorf("failed to create target directory: %v", err)
 	}
 
 	// Walk through the source directory
-	err := filepath.Walk(p.sourceDir, p.processFile)
+	err = filepath.Walk(p.sourceDir, p.processFile)
 	if err != nil {
 		return fmt.Errorf("error walking through directory: %v", err)
 	}
@@ -205,6 +227,24 @@ func (p *Processor) processFile(path string, info os.FileInfo, err error) error 
 
 	// Copy file to new location
 	newPath := filepath.Join(newDir, filename)
+
+	// Check if target file exists and is identical
+	if identical, err := p.areFilesIdentical(path, newPath); err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("error comparing files: %v", err)
+		}
+	} else if identical {
+		if p.config.Logging.Enabled {
+			log.Printf("Skipping identical file: %s", path)
+		}
+		if p.deleteSource {
+			if err := os.Remove(path); err != nil {
+				return fmt.Errorf("failed to delete source file %s: %v", path, err)
+			}
+		}
+		return nil
+	}
+
 	if err := p.copyFile(path, newPath); err != nil {
 		return fmt.Errorf("failed to copy file %s: %v", path, err)
 	}
@@ -224,6 +264,66 @@ func (p *Processor) processFile(path string, info os.FileInfo, err error) error 
 	}
 
 	return nil
+}
+
+// areFilesIdentical efficiently compares two files by size and hash
+func (p *Processor) areFilesIdentical(src, dst string) (bool, error) {
+	// First check if destination exists
+	dstInfo, err := os.Stat(dst)
+	if err != nil {
+		return false, err
+	}
+
+	// Check if source exists
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return false, err
+	}
+
+	// Quick size comparison
+	if srcInfo.Size() != dstInfo.Size() {
+		return false, nil
+	}
+
+	// Compare file contents using SHA-256 hash
+	srcHash, err := p.calculateFileHash(src)
+	if err != nil {
+		return false, err
+	}
+
+	dstHash, err := p.calculateFileHash(dst)
+	if err != nil {
+		return false, err
+	}
+
+	return srcHash == dstHash, nil
+}
+
+// calculateFileHash calculates SHA-256 hash of a file using buffered reads
+func (p *Processor) calculateFileHash(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	hash := sha256.New()
+	buf := make([]byte, copyBufferSize)
+
+	for {
+		n, err := file.Read(buf)
+		if n > 0 {
+			hash.Write(buf[:n])
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+	}
+
+	return fmt.Sprintf("%x", hash.Sum(nil)), nil
 }
 
 func (p *Processor) getMediaType(ext string) string {
@@ -292,7 +392,9 @@ func (p *Processor) copyFile(src, dst string) error {
 	}
 	defer dstFile.Close()
 
-	if _, err := io.Copy(dstFile, srcFile); err != nil {
+	buf := make([]byte, copyBufferSize)
+	_, err = io.CopyBuffer(dstFile, srcFile, buf)
+	if err != nil {
 		return err
 	}
 

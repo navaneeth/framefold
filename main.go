@@ -44,7 +44,11 @@ func main() {
 	}
 
 	// Create and run processor
-	processor := framefold.NewProcessor(sourceDir, targetDir, config, deleteSource)
+	processor, err := framefold.NewProcessor(sourceDir, targetDir, config, deleteSource)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	if err := processor.Process(); err != nil {
 		log.Fatal(err)
 	}
