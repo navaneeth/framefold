@@ -24,26 +24,33 @@ git clone https://github.com/yourusername/framefold.git
 cd framefold
 ```
 
-2. Build the binary
+2. Install
 ```bash
-make local
+make  # Compiles and installs to your Go bin directory
 ```
 
-This will create a `framefold` binary in the current directory with the current git commit hash embedded.
-
-### Cross-compilation
-
-To build for multiple platforms:
+For local development, you can build without installing:
 ```bash
-make build
+make local  # Creates framefold binary in current directory
 ```
 
-This will create binaries for:
+### Release Builds
+
+To build release tarballs for all supported platforms:
+```bash
+make release
+```
+
+This will create tarballs in the `dist` directory for:
 - macOS (Intel and Apple Silicon)
 - Linux (AMD64 and ARM64)
-- Raspberry Pi (ARM)
+- Raspberry Pi (ARM v6 and v7)
 
-All binaries will be placed in the `build` directory.
+Each tarball contains:
+- The platform-specific binary
+- README.md
+- LICENSE (if present)
+- Example configuration file (if present)
 
 ## Usage
 
@@ -69,7 +76,9 @@ framefold --version
 
 Example version output:
 ```
-Framefold version 0.1.0 (a1b2c3d)
+Framefold version 1.2.0 (a1b2c3d)  # If git tag v1.2.0 exists
+# or
+Framefold version dev (a1b2c3d)     # If no git tag exists
 ```
 
 Example processing output:
@@ -112,6 +121,7 @@ To customize the behavior, create a `config.json` file with your desired setting
 - `--target`: Target directory for organized files (required)
 - `--config`: Path to configuration file (optional)
 - `--delete-source`: Delete source files and empty directories after successful copy (optional, default: false)
+- `--output`: Path to output file to write list of processed files (optional)
 - `--version`: Show version information and git commit hash
 
 ### Template Variables

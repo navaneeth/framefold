@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/template"
 	"time"
@@ -34,34 +35,64 @@ type FileInfo struct {
 
 // Processor handles the file organization process
 type Processor struct {
-	config        Config
-	stats         Stats
-	sourceDir     string
-	targetDir     string
-	deleteSource  bool
-	processedDirs map[string]bool // Track directories that had files processed
-	lock          *processLock
+	config         Config
+	stats          Stats
+	sourceDir      string
+	targetDir      string
+	deleteSource   bool
+	processedDirs  map[string]bool // Track directories that had files processed
+	processedFiles []string        // Track processed files for output
+	outputPath     string          // Path to output file
+	lock           *processLock
 }
 
 // NewProcessor creates a new file processor
-func NewProcessor(sourceDir, targetDir string, config Config, deleteSource bool) (*Processor, error) {
+func NewProcessor(sourceDir, targetDir string, config Config, deleteSource bool, outputPath string) (*Processor, error) {
 	lock, err := newProcessLock()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create process lock: %v", err)
 	}
 
 	return &Processor{
-		config:        config,
-		sourceDir:     sourceDir,
-		targetDir:     targetDir,
-		deleteSource:  deleteSource,
-		stats:         Stats{StartTime: time.Now()},
-		processedDirs: make(map[string]bool),
-		lock:          lock,
+		config:         config,
+		sourceDir:      sourceDir,
+		targetDir:      targetDir,
+		deleteSource:   deleteSource,
+		stats:          Stats{StartTime: time.Now()},
+		processedDirs:  make(map[string]bool),
+		processedFiles: make([]string, 0),
+		outputPath:     outputPath,
+		lock:           lock,
 	}, nil
 }
 
 // Process organizes files from source to target directory
+// WriteProcessedFiles writes the list of processed files to the output file
+func (p *Processor) WriteProcessedFiles() error {
+	if p.outputPath == "" {
+		return nil
+	}
+
+	// Sort files for consistent output
+	sort.Strings(p.processedFiles)
+
+	// Create output file
+	f, err := os.Create(p.outputPath)
+	if err != nil {
+		return fmt.Errorf("failed to create output file: %v", err)
+	}
+	defer f.Close()
+
+	// Write each file path on a new line
+	for _, file := range p.processedFiles {
+		if _, err := fmt.Fprintln(f, file); err != nil {
+			return fmt.Errorf("failed to write to output file: %v", err)
+		}
+	}
+
+	return nil
+}
+
 func (p *Processor) Process() error {
 	// Try to acquire lock
 	locked, err := p.lock.acquire()
@@ -89,6 +120,11 @@ func (p *Processor) Process() error {
 		if err := p.cleanEmptyDirs(); err != nil {
 			return fmt.Errorf("error cleaning empty directories: %v", err)
 		}
+	}
+
+	// Write processed files list if output path is set
+	if err := p.WriteProcessedFiles(); err != nil {
+		return fmt.Errorf("error writing processed files list: %v", err)
 	}
 
 	return nil
@@ -257,10 +293,14 @@ func (p *Processor) processFile(path string, info os.FileInfo, err error) error 
 		if p.config.Logging.Enabled {
 			log.Printf("Moved %s to %s", path, newPath)
 		}
+		// Add to processed files list
+		p.processedFiles = append(p.processedFiles, path)
 	} else {
 		if p.config.Logging.Enabled {
 			log.Printf("Copied %s to %s", path, newPath)
 		}
+		// Add to processed files list
+		p.processedFiles = append(p.processedFiles, path)
 	}
 
 	return nil

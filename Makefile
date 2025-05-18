@@ -1,13 +1,13 @@
-.PHONY: build clean test dist install all
+.PHONY: build clean test dist install all release local
 
 # Get the git commit hash (short form)
 GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
-# Get version from version.go
-VERSION := $(shell awk -F'"' '/Version[[:space:]]*=/{print $$2}' pkg/framefold/version.go)
+# Get version from git tag, fallback to dev
+VERSION := $(shell git describe --tags 2>/dev/null || echo "dev")
 
 # Build flags
-LDFLAGS := -ldflags "-X 'framefold/pkg/framefold.CommitHash=$(GIT_COMMIT)'"
+LDFLAGS := -ldflags "-X 'framefold/pkg/framefold.CommitHash=$(GIT_COMMIT)' -X 'framefold/pkg/framefold.Version=$(VERSION)'"
 
 # Build targets for different platforms
 TARGETS := \
@@ -18,11 +18,15 @@ TARGETS := \
 	dist/framefold-$(VERSION)-linux-armv6.tar.gz \
 	dist/framefold-$(VERSION)-linux-armv7.tar.gz
 
-# Default target
-all: clean build
+# Default target installs the binary
+all: install
 
-# Build all targets
-build: $(TARGETS)
+# Install using go install
+install:
+	go install $(LDFLAGS)
+
+# Build release tarballs for all platforms
+release: clean $(TARGETS)
 
 # Create distribution directory
 dist:
@@ -73,13 +77,9 @@ dist/framefold-$(VERSION)-linux-armv7.tar.gz: dist
 	GOOS=linux GOARCH=arm GOARM=7 go build $(LDFLAGS) -o build/framefold-$(VERSION)-linux-armv7/framefold .
 	$(call make_tarball,framefold-$(VERSION)-linux-armv7)
 
-# Build for the current platform
+# Build for local development
 local:
 	go build $(LDFLAGS) -o framefold .
-
-# Install locally (uses host OS/ARCH)
-install:
-	go install $(LDFLAGS)
 
 # Clean build artifacts
 clean:

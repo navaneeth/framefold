@@ -16,6 +16,7 @@ func main() {
 		targetDir    string
 		deleteSource bool
 		showVersion  bool
+		outputPath   string
 	)
 
 	// Parse command line flags
@@ -24,6 +25,7 @@ func main() {
 	flag.StringVar(&targetDir, "target", "", "Target directory to organize photos")
 	flag.BoolVar(&deleteSource, "delete-source", false, "Delete source files after successful copy (default: false)")
 	flag.BoolVar(&showVersion, "version", false, "Show version information")
+	flag.StringVar(&outputPath, "output", "", "Path to output file to write list of processed files")
 	flag.Parse()
 
 	// Show version if requested
@@ -44,7 +46,7 @@ func main() {
 	}
 
 	// Create and run processor
-	processor, err := framefold.NewProcessor(sourceDir, targetDir, config, deleteSource)
+	processor, err := framefold.NewProcessor(sourceDir, targetDir, config, deleteSource, outputPath)
 	if err != nil {
 		log.Fatal(err)
 	}
