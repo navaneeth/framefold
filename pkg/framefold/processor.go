@@ -294,13 +294,13 @@ func (p *Processor) processFile(path string, info os.FileInfo, err error) error 
 			log.Printf("Moved %s to %s", path, newPath)
 		}
 		// Add to processed files list
-		p.processedFiles = append(p.processedFiles, path)
+		p.processedFiles = append(p.processedFiles, newPath)
 	} else {
 		if p.config.Logging.Enabled {
 			log.Printf("Copied %s to %s", path, newPath)
 		}
 		// Add to processed files list
-		p.processedFiles = append(p.processedFiles, path)
+		p.processedFiles = append(p.processedFiles, newPath)
 	}
 
 	return nil
