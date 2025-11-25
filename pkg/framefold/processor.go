@@ -6,18 +6,15 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"text/template"
 	"time"
-
-	"github.com/dsoprea/go-exif/v3"
 )
 
 const (
-	// Maximum size to read when looking for EXIF data
-	maxExifSize = 256 * 1024 // 256KB should be enough for EXIF
 	// Buffer size for file operations (1MB)
 	copyBufferSize = 1024 * 1024
 )
@@ -35,15 +32,17 @@ type FileInfo struct {
 
 // Processor handles the file organization process
 type Processor struct {
-	config         Config
-	stats          Stats
-	sourceDir      string
-	targetDir      string
-	deleteSource   bool
-	processedDirs  map[string]bool // Track directories that had files processed
-	processedFiles []string        // Track processed files for output
-	outputPath     string          // Path to output file
-	lock           *processLock
+	config            Config
+	stats             Stats
+	sourceDir         string
+	targetDir         string
+	deleteSource      bool
+	processedDirs     map[string]bool // Track directories that had files processed
+	processedFiles    []string        // Track processed files for output
+	outputPath        string          // Path to output file
+	lock              *processLock
+	exiftoolChecked   bool // Track if exiftool availability has been checked
+	exiftoolAvailable bool // Whether exiftool is available
 }
 
 // NewProcessor creates a new file processor
@@ -377,46 +376,40 @@ func (p *Processor) getMediaType(ext string) string {
 	return ""
 }
 
+// checkExiftool verifies that exiftool is available on the system
+func (p *Processor) checkExiftool() error {
+	cmd := exec.Command("exiftool", "-ver")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("exiftool is not available: %v\nPlease install exiftool to extract EXIF data from media files", err)
+	}
+	return nil
+}
+
 func (p *Processor) getFileDate(path string) (time.Time, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return time.Time{}, err
-	}
-	defer file.Close()
-
-	// Only read the first maxExifSize bytes
-	limitedReader := io.LimitReader(file, maxExifSize)
-
-	// Read the limited data into memory
-	data, err := io.ReadAll(limitedReader)
-	if err != nil {
-		return time.Time{}, err
-	}
-
-	// Try to extract EXIF data from the limited buffer
-	rawExif, err := exif.SearchAndExtractExif(data)
-	if err != nil {
-		return time.Time{}, err
-	}
-
-	entries, _, err := exif.GetFlatExifDataUniversalSearch(rawExif, nil, true)
-	if err != nil {
-		return time.Time{}, err
-	}
-
-	var dateTime string
-	for _, entry := range entries {
-		if entry.TagName == "DateTime" || entry.TagName == "DateTimeOriginal" {
-			dateTime = entry.Formatted
-			break
+	// Check exiftool availability on first call
+	if !p.exiftoolChecked {
+		p.exiftoolChecked = true
+		if err := p.checkExiftool(); err != nil {
+			return time.Time{}, err
 		}
+		p.exiftoolAvailable = true
 	}
 
-	if dateTime == "" {
+	// Try to get DateTimeOriginal first, then DateTime as fallback
+	cmd := exec.Command("exiftool", "-DateTimeOriginal", "-DateTime", "-s", "-s", "-s", path)
+	output, err := cmd.Output()
+	if err != nil {
+		return time.Time{}, fmt.Errorf("exiftool execution failed: %v", err)
+	}
+
+	// Parse the output - exiftool returns the first matching tag
+	dateTimeStr := strings.TrimSpace(string(output))
+	if dateTimeStr == "" {
 		return time.Time{}, fmt.Errorf("no DateTime found in EXIF")
 	}
 
-	return time.Parse("2006:01:02 15:04:05", dateTime)
+	// Parse the EXIF date format: "YYYY:MM:DD HH:MM:SS"
+	return time.Parse("2006:01:02 15:04:05", dateTimeStr)
 }
 
 func (p *Processor) copyFile(src, dst string) error {
