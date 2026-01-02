@@ -69,6 +69,11 @@ Move files instead of copying (deletes source files and empty directories):
 framefold --source ~/Pictures/Unsorted --target ~/Pictures/Organized --delete-source
 ```
 
+Preview what would happen without making changes (dry-run mode):
+```bash
+framefold --source ~/Pictures/Unsorted --target ~/Pictures/Organized --dry-run
+```
+
 Show version information:
 ```bash
 framefold --version
@@ -121,6 +126,7 @@ To customize the behavior, create a `config.json` file with your desired setting
 - `--target`: Target directory for organized files (required)
 - `--config`: Path to configuration file (optional)
 - `--delete-source`: Delete source files and empty directories after successful copy (optional, default: false)
+- `--dry-run`: Simulate operations without making changes (optional, default: false)
 - `--output`: Path to output file to write list of processed files (optional)
 - `--version`: Show version information and git commit hash
 

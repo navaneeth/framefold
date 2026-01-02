@@ -37,6 +37,7 @@ type Processor struct {
 	sourceDir         string
 	targetDir         string
 	deleteSource      bool
+	dryRun            bool            // Simulate operations without making changes
 	processedDirs     map[string]bool // Track directories that had files processed
 	processedFiles    []string        // Track processed files for output
 	outputPath        string          // Path to output file
@@ -46,7 +47,7 @@ type Processor struct {
 }
 
 // NewProcessor creates a new file processor
-func NewProcessor(sourceDir, targetDir string, config Config, deleteSource bool, outputPath string) (*Processor, error) {
+func NewProcessor(sourceDir, targetDir string, config Config, deleteSource bool, outputPath string, dryRun bool) (*Processor, error) {
 	lock, err := newProcessLock()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create process lock: %v", err)
@@ -57,6 +58,7 @@ func NewProcessor(sourceDir, targetDir string, config Config, deleteSource bool,
 		sourceDir:      sourceDir,
 		targetDir:      targetDir,
 		deleteSource:   deleteSource,
+		dryRun:         dryRun,
 		stats:          Stats{StartTime: time.Now()},
 		processedDirs:  make(map[string]bool),
 		processedFiles: make([]string, 0),
@@ -93,37 +95,58 @@ func (p *Processor) WriteProcessedFiles() error {
 }
 
 func (p *Processor) Process() error {
-	// Try to acquire lock
-	locked, err := p.lock.acquire()
-	if err != nil {
-		return fmt.Errorf("error acquiring lock: %v", err)
+	// Skip lock in dry-run mode
+	if !p.dryRun {
+		// Try to acquire lock
+		locked, err := p.lock.acquire()
+		if err != nil {
+			return fmt.Errorf("error acquiring lock: %v", err)
+		}
+		if !locked {
+			return fmt.Errorf("another instance of framefold is already running")
+		}
+		defer p.lock.release()
 	}
-	if !locked {
-		return fmt.Errorf("another instance of framefold is already running")
-	}
-	defer p.lock.release()
 
 	// Create target directory if it doesn't exist
-	if err := os.MkdirAll(p.targetDir, 0755); err != nil {
-		return fmt.Errorf("failed to create target directory: %v", err)
+	if p.dryRun {
+		if p.config.Logging.Enabled {
+			log.Printf("[DRY RUN] Would create target directory: %s", p.targetDir)
+		}
+	} else {
+		if err := os.MkdirAll(p.targetDir, 0755); err != nil {
+			return fmt.Errorf("failed to create target directory: %v", err)
+		}
 	}
 
 	// Walk through the source directory
-	err = filepath.Walk(p.sourceDir, p.processFile)
+	err := filepath.Walk(p.sourceDir, p.processFile)
 	if err != nil {
 		return fmt.Errorf("error walking through directory: %v", err)
 	}
 
 	// If deleting source files, clean up empty directories
 	if p.deleteSource {
-		if err := p.cleanEmptyDirs(); err != nil {
-			return fmt.Errorf("error cleaning empty directories: %v", err)
+		if p.dryRun {
+			if p.config.Logging.Enabled {
+				log.Printf("[DRY RUN] Would clean empty directories")
+			}
+		} else {
+			if err := p.cleanEmptyDirs(); err != nil {
+				return fmt.Errorf("error cleaning empty directories: %v", err)
+			}
 		}
 	}
 
 	// Write processed files list if output path is set
-	if err := p.WriteProcessedFiles(); err != nil {
-		return fmt.Errorf("error writing processed files list: %v", err)
+	if p.dryRun {
+		if p.outputPath != "" && p.config.Logging.Enabled {
+			log.Printf("[DRY RUN] Would write processed files to: %s", p.outputPath)
+		}
+	} else {
+		if err := p.WriteProcessedFiles(); err != nil {
+			return fmt.Errorf("error writing processed files list: %v", err)
+		}
 	}
 
 	return nil
@@ -161,11 +184,17 @@ func (p *Processor) cleanEmptyDirs() error {
 
 		// If directory is empty, remove it
 		if len(entries) == 0 {
-			if err := os.Remove(dir); err != nil {
-				return fmt.Errorf("error removing empty directory %s: %v", dir, err)
-			}
-			if p.config.Logging.Enabled {
-				log.Printf("Removed empty directory: %s", dir)
+			if p.dryRun {
+				if p.config.Logging.Enabled {
+					log.Printf("[DRY RUN] Would remove empty directory: %s", dir)
+				}
+			} else {
+				if err := os.Remove(dir); err != nil {
+					return fmt.Errorf("error removing empty directory %s: %v", dir, err)
+				}
+				if p.config.Logging.Enabled {
+					log.Printf("Removed empty directory: %s", dir)
+				}
 			}
 		}
 	}
@@ -213,7 +242,7 @@ func (p *Processor) processFile(path string, info os.FileInfo, err error) error 
 	date, err := p.getFileDate(path)
 	if err != nil {
 		if p.config.Logging.Enabled {
-			log.Printf("Warning: Could not get EXIF data for %s, using file modification time", path)
+			log.Printf("Warning: Could not get EXIF data for %s (%v), using file modification time", path, err)
 		}
 		date = info.ModTime()
 	} else {
@@ -244,8 +273,14 @@ func (p *Processor) processFile(path string, info os.FileInfo, err error) error 
 
 	// Create the target directory
 	newDir := filepath.Join(p.targetDir, targetPath.String())
-	if err := os.MkdirAll(newDir, 0755); err != nil {
-		return fmt.Errorf("failed to create directory %s: %v", newDir, err)
+	if p.dryRun {
+		if p.config.Logging.Enabled {
+			log.Printf("[DRY RUN] Would create directory: %s", newDir)
+		}
+	} else {
+		if err := os.MkdirAll(newDir, 0755); err != nil {
+			return fmt.Errorf("failed to create directory %s: %v", newDir, err)
+		}
 	}
 
 	// Generate target filename
@@ -273,34 +308,49 @@ func (p *Processor) processFile(path string, info os.FileInfo, err error) error 
 			log.Printf("Skipping identical file: %s", path)
 		}
 		if p.deleteSource {
-			if err := os.Remove(path); err != nil {
-				return fmt.Errorf("failed to delete source file %s: %v", path, err)
+			if p.dryRun {
+				if p.config.Logging.Enabled {
+					log.Printf("[DRY RUN] Would delete source file: %s", path)
+				}
+			} else {
+				if err := os.Remove(path); err != nil {
+					return fmt.Errorf("failed to delete source file %s: %v", path, err)
+				}
 			}
 		}
 		return nil
 	}
 
-	if err := p.copyFile(path, newPath); err != nil {
-		return fmt.Errorf("failed to copy file %s: %v", path, err)
+	if p.dryRun {
+		if p.config.Logging.Enabled {
+			if p.deleteSource {
+				log.Printf("[DRY RUN] Would move %s to %s", path, newPath)
+			} else {
+				log.Printf("[DRY RUN] Would copy %s to %s", path, newPath)
+			}
+		}
+	} else {
+		if err := p.copyFile(path, newPath); err != nil {
+			return fmt.Errorf("failed to copy file %s: %v", path, err)
+		}
+
+		// Delete source file if requested
+		if p.deleteSource {
+			if err := os.Remove(path); err != nil {
+				return fmt.Errorf("failed to delete source file %s: %v", path, err)
+			}
+			if p.config.Logging.Enabled {
+				log.Printf("Moved %s to %s", path, newPath)
+			}
+		} else {
+			if p.config.Logging.Enabled {
+				log.Printf("Copied %s to %s", path, newPath)
+			}
+		}
 	}
 
-	// Delete source file if requested
-	if p.deleteSource {
-		if err := os.Remove(path); err != nil {
-			return fmt.Errorf("failed to delete source file %s: %v", path, err)
-		}
-		if p.config.Logging.Enabled {
-			log.Printf("Moved %s to %s", path, newPath)
-		}
-		// Add to processed files list
-		p.processedFiles = append(p.processedFiles, newPath)
-	} else {
-		if p.config.Logging.Enabled {
-			log.Printf("Copied %s to %s", path, newPath)
-		}
-		// Add to processed files list
-		p.processedFiles = append(p.processedFiles, newPath)
-	}
+	// Add to processed files list (in both dry-run and real mode)
+	p.processedFiles = append(p.processedFiles, newPath)
 
 	return nil
 }
